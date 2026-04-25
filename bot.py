@@ -6,7 +6,7 @@ from psycopg2.extras import RealDictCursor
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from telegram.error import BadRequest, Forbidden
+from telegram.error import BadRequest, Forbidden, TimedOut
 from cryptography.fernet import Fernet
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -46,16 +46,25 @@ def health():
 def get_db():
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        raise Exception("DATABASE_URL not set")
+        print("DATABASE_URL not set - skipping DB")
+        return None
 
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-    return psycopg2.connect(db_url, sslmode='require', cursor_factory=RealDictCursor)
+    try:
+        return psycopg2.connect(db_url, sslmode='require', cursor_factory=RealDictCursor)
+    except Exception as e:
+        print(f"DB connect error: {e}")
+        return None
 
 def init_db():
+    conn = get_db()
+    if not conn:
+        print("No database - running without user tracking")
+        return
     try:
-        with get_db() as conn:
+        with conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS users (
@@ -65,14 +74,19 @@ def init_db():
                         started_at TIMESTAMP DEFAULT NOW()
                     )
                 """)
-                conn.commit()
         print("Database initialized successfully")
     except Exception as e:
         print(f"Database init error: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def save_user(user):
+    conn = get_db()
+    if not conn:
+        return
     try:
-        with get_db() as conn:
+        with conn:
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO users (user_id, username, first_name)
@@ -81,29 +95,43 @@ def save_user(user):
                         username = EXCLUDED.username,
                         first_name = EXCLUDED.first_name
                 """, (user.id, user.username, user.first_name))
-                conn.commit()
     except Exception as e:
         print(f"Save user error: {e}")
+    finally:
+        if conn:
+            conn.close()
 
 def load_users():
+    conn = get_db()
+    if not conn:
+        return []
     try:
-        with get_db() as conn:
+        with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id FROM users")
                 return [row['user_id'] for row in cur.fetchall()]
     except Exception as e:
         print(f"Load users error: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
 
 def get_user_count():
+    conn = get_db()
+    if not conn:
+        return 0
     try:
-        with get_db() as conn:
+        with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) FROM users")
                 return cur.fetchone()['count']
     except Exception as e:
         print(f"Get user count error: {e}")
         return 0
+    finally:
+        if conn:
+            conn.close()
 
 def get_file_type(filename):
     filename = filename.lower()
@@ -159,12 +187,20 @@ Encrypt JS, VPN configs, tunneling files, and all cloud configs with AES-256.
 
 *Max file size:* 20MB
     """
-    await update.message.reply_photo(
-        photo=BANNER_URL,
-        caption=welcome_caption,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    try:
+        await update.message.reply_photo(
+            photo=BANNER_URL,
+            caption=welcome_caption,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    except BadRequest:
+        # Fallback if banner URL fails
+        await update.message.reply_text(
+            welcome_caption,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -270,7 +306,10 @@ You are the bot owner @{OWNER_USERNAME}
 - No rate limits
         """
 
-    await query.edit_message_caption(caption=text, parse_mode='Markdown', reply_markup=query.message.reply_markup)
+    try:
+        await query.edit_message_caption(caption=text, parse_mode='Markdown', reply_markup=query.message.reply_markup)
+    except:
+        await query.edit_message_text(text=text, parse_mode='Markdown', reply_markup=query.message.reply_markup)
 
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
