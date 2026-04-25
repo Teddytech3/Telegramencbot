@@ -1,6 +1,7 @@
 import os
 import threading
 import psycopg2
+import urllib.parse as urlparse
 from psycopg2.extras import RealDictCursor
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
@@ -39,20 +40,32 @@ def home():
     return "🔐 File Encryptor Bot is running!"
 
 def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise Exception("DATABASE_URL not set. Add Postgres addon: heroku addons:create heroku-postgresql:essential-0")
+
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    return psycopg2.connect(db_url, sslmode='require', cursor_factory=RealDictCursor)
 
 def init_db():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username TEXT,
-                    first_name TEXT,
-                    started_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            conn.commit()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id BIGINT PRIMARY KEY,
+                        username TEXT,
+                        first_name TEXT,
+                        started_at TIMESTAMP DEFAULT NOW()
+                    )
+                """)
+                conn.commit()
+        print("Database initialized successfully")
+    except Exception as e:
+        print(f"Database init error: {e}")
+        raise
 
 def save_user(user):
     with get_db() as conn:
@@ -373,7 +386,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Unsupported file type. I accept: {', '.join(ALLOWED_EXTENSIONS)},.enc"
         )
         return
-    if doc.file_size > 20 * 1024 * 1024:
+    if doc.file_size > 20 * 1024:
         await update.message.reply_text("❌ File too large. Max 20MB")
         return
 
