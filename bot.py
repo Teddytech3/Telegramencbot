@@ -1,5 +1,4 @@
 import os
-import threading
 import sys
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -400,7 +399,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Unsupported file type. I accept: {', '.join(ALLOWED_EXTENSIONS)},.enc"
         )
         return
-    if doc.file_size > 20 * 1024:
+    if doc.file_size > 20 * 1024 * 1024:
         await update.message.reply_text("❌ File too large. Max 20MB")
         return
 
@@ -600,13 +599,15 @@ async def batch_decrypt(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 success_count += 1
             except Exception:
                 fail_count += 1
-                os.remove(file_data['path'])
+                if os.path.exists(file_data['path']):
+                    os.remove(file_data['path'])
 
         await msg.edit_text(f"✅ Batch complete!\nSuccess: {success_count}\nFailed: {fail_count}")
     except Exception:
         await msg.edit_text("❌ Invalid key for batch. All files failed.")
         for file_data in batch_files:
-            os.remove(file_data['path'])
+            if os.path.exists(file_data['path']):
+                os.remove(file_data['path'])
 
     context.user_data.pop('batch_files', None)
 
@@ -642,10 +643,10 @@ def run_bot():
     application.run_polling()
 
 if __name__ == "__main__":
-    # If run as web, only start Flask
     if len(sys.argv) > 1 and sys.argv[1] == 'web':
+        # Web dyno - only Flask
         port = int(os.environ.get('PORT', 5000))
         app.run(host='0.0.0.0', port=port)
     else:
-        # Default: run bot
+        # Worker dyno - only bot
         run_bot()
