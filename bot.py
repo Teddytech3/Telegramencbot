@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from flask import Flask
@@ -624,7 +625,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def run_bot():
     init_db()
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).pool_timeout(30).build()
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("encrypt", encrypt))
     application.add_handler(CommandHandler("decrypt", decrypt))
@@ -639,14 +641,24 @@ def run_bot():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & filters.REPLY, handle_key_reply))
+
     print("Starting bot polling...")
-    application.run_polling()
+
+    while True:
+        try:
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                close_loop=False,
+                stop_signals=None
+            )
+        except Exception as e:
+            print(f"Polling crashed: {e}. Restarting in 5s...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'web':
-        # Web dyno - only Flask
         port = int(os.environ.get('PORT', 5000))
         app.run(host='0.0.0.0', port=port)
     else:
-        # Worker dyno - only bot
         run_bot()
