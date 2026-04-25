@@ -1,7 +1,7 @@
 import os
 import threading
+import sys
 import psycopg2
-import urllib.parse as urlparse
 from psycopg2.extras import RealDictCursor
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
@@ -39,10 +39,14 @@ app = Flask(__name__)
 def home():
     return "🔐 File Encryptor Bot is running!"
 
+@app.route('/health')
+def health():
+    return "OK", 200
+
 def get_db():
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
-        raise Exception("DATABASE_URL not set. Add Postgres addon: heroku addons:create heroku-postgresql:essential-0")
+        raise Exception("DATABASE_URL not set")
 
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
@@ -65,31 +69,41 @@ def init_db():
         print("Database initialized successfully")
     except Exception as e:
         print(f"Database init error: {e}")
-        raise
 
 def save_user(user):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO users (user_id, username, first_name)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    username = EXCLUDED.username,
-                    first_name = EXCLUDED.first_name
-            """, (user.id, user.username, user.first_name))
-            conn.commit()
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (user_id, username, first_name)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        username = EXCLUDED.username,
+                        first_name = EXCLUDED.first_name
+                """, (user.id, user.username, user.first_name))
+                conn.commit()
+    except Exception as e:
+        print(f"Save user error: {e}")
 
 def load_users():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM users")
-            return [row['user_id'] for row in cur.fetchall()]
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM users")
+                return [row['user_id'] for row in cur.fetchall()]
+    except Exception as e:
+        print(f"Load users error: {e}")
+        return []
 
 def get_user_count():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM users")
-            return cur.fetchone()['count']
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM users")
+                return cur.fetchone()['count']
+    except Exception as e:
+        print(f"Get user count error: {e}")
+        return 0
 
 def get_file_type(filename):
     filename = filename.lower()
@@ -624,9 +638,14 @@ def run_bot():
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & filters.REPLY, handle_key_reply))
+    print("Starting bot polling...")
     application.run_polling()
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot).start()
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    # If run as web, only start Flask
+    if len(sys.argv) > 1 and sys.argv[1] == 'web':
+        port = int(os.environ.get('PORT', 5000))
+        app.run(host='0.0.0.0', port=port)
+    else:
+        # Default: run bot
+        run_bot()
